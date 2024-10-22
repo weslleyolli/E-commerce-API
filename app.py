@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-from flask_login import UserMixin, LoginManager, login_user, login_required, logout_user
+from flask_login import UserMixin, LoginManager, login_user, login_required, logout_user, current_user
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'
@@ -18,12 +18,18 @@ class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(80), nullable=False)
+    cart = db.relationship('Cart', backref='user', lazy=True)
 
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     price = db.Column(db.Float, nullable=False)
     description = db.Column(db.Text, nullable=False)
+
+class Cart(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -103,10 +109,56 @@ def get_products():
         "description": product.description
     } for product in products])
 
+# Checkout
+@app.route("/api/cart/add/<int:product_id>", methods=["POST"])
+@login_required
+def add_to_cart(product_id):
+    user = User.query.get(current_user.id)
+    product = Product.query.get(product_id)
+    if user and product:
+        cart_item = Cart(user_id=user.id, product_id=product.id)
+        db.session.add(cart_item)
+        db.session.commit()
+        return jsonify({"message": "Item added to cart"})
+    return jsonify({"message": "User not found or Product not found"}), 404
 
-@app.route("/")
-def hello():
-    return "Hello World!"
+@app.route("/api/cart/delete/<int:product_id>", methods=["DELETE"])
+@login_required
+def delete_from_cart(product_id):
+    cart_item = Cart.query.filter_by(user_id=current_user.id , product_id=product_id).first()
+    if cart_item:
+        db.session.delete(cart_item)
+        db.session.commit()
+        return jsonify({"message": "Item deleted from cart"})
+    return jsonify({"message": "Item not found in cart"}), 404
+
+@app.route("/api/cart", methods=["GET"])
+@login_required
+def view_cart():
+    user = User.query.get(current_user.id)
+    cart_items = user.cart
+    cart_content = []
+    for cart_item in cart_items:
+        product = Product.query.get(cart_item.product_id)
+        cart_content.append({
+            "id": cart_item.id,
+            "user_id": cart_item.user_id,
+            "product_id": cart_item.product_id,
+            "product_name": product.name,
+            "product_price": product.price
+        })
+    return jsonify(cart_content)
+
+@app.route("/api/cart/checkout", methods=["POST"])
+@login_required
+def checkout():
+    user = User.query.get(int(current_user.id))
+    cart_items = user.cart
+    for cart_item in cart_items:
+       db.session.delete(cart_item)
+    db.session.commit()
+    return jsonify({"message": "Checkout successful. Cart has been cleared."})
+
 
 if __name__ == "__main__":
     app.run(debug=True)
